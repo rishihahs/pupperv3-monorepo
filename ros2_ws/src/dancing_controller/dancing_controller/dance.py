@@ -222,12 +222,8 @@ class DanceController(Node):
 
     def circledance(self):
         """Example circledance motion implementation using move."""
-        self.move(0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 1.0)  # Turn right
-        time.sleep(1.1)
-        self.move(0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5)  # Move forward
-        time.sleep(0.6)
-        self.move(0.0, 0.0, 0.0, 0.0, 0.0, -0.3, 1.0)  # Turn left
-        time.sleep(1.1)
+        self.move(0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 4.0)  # Turn right
+        time.sleep(4.0)
     
     def run_headbang(self):
         """Run the headbang motion until stopped."""
