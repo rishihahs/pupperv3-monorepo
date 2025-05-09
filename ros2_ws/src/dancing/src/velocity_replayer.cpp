@@ -28,9 +28,13 @@ public:
     this->declare_parameter("replay_file", "velocity_recording.bin");
     this->declare_parameter("replay_to_cmd_vel", true);
     this->declare_parameter("replay_time_factor", 1.0);
-    this->declare_parameter("loop_replay", false);
-    this->declare_parameter("loop_pause_time", 1.0);  // Time in seconds to pause between loops
-    
+    this->declare_parameter("loop_replay", true);
+    this->declare_parameter("loop_pause_time", 0.1);  // Time in seconds to pause between loops
+    this->declare_parameter("trim_start_seconds", 1.0);  // Time in seconds to trim from start
+    this->declare_parameter("trim_end_seconds", 0.0);    // Time in seconds to trim from end
+
+    trim_end_seconds_ = this->get_parameter("trim_end_seconds").as_double();
+    trim_start_seconds_ = this->get_parameter("trim_start_seconds").as_double();
     replay_file_ = this->get_parameter("replay_file").as_string();
     replay_to_cmd_vel_ = this->get_parameter("replay_to_cmd_vel").as_bool();
     replay_time_factor_ = this->get_parameter("replay_time_factor").as_double();
@@ -92,67 +96,141 @@ public:
 private:
   bool load_replay_file() {
     try {
-      std::ifstream infile(replay_file_, std::ios::binary);
-      if (!infile) {
-        RCLCPP_WARN(this->get_logger(), "Failed to open replay file: %s", replay_file_.c_str());
-        return false;
-      }
-      
-      // Read number of messages
-      size_t num_msgs;
-      infile.read(reinterpret_cast<char*>(&num_msgs), sizeof(num_msgs));
-      
-      replay_data_.clear();
-      replay_data_.reserve(num_msgs);
-      
-      // Baseline time for all messages
-      rclcpp::Time base_time(0, 0);
-      
-      // Read each message
-      for (size_t i = 0; i < num_msgs; i++) {
-        TimestampedTwist tj;
+        std::ifstream infile(replay_file_, std::ios::binary);
+        if (!infile) {
+            RCLCPP_WARN(this->get_logger(), "Failed to open replay file: %s", replay_file_.c_str());
+            return false;
+        }
         
-        // Read time delta
-        int64_t nanosec_delta;
-        infile.read(reinterpret_cast<char*>(&nanosec_delta), sizeof(nanosec_delta));
+        // Read number of messages
+        size_t num_msgs;
+        infile.read(reinterpret_cast<char*>(&num_msgs), sizeof(num_msgs));
         
-        // Calculate timestamp relative to base_time
-        tj.time = base_time + rclcpp::Duration(std::chrono::nanoseconds(nanosec_delta));
+        // Temporary vector to hold all loaded data
+        std::vector<TimestampedTwist> temp_data;
+        temp_data.reserve(num_msgs);
         
-        // Read linear velocity
-        infile.read(reinterpret_cast<char*>(&tj.msg.linear.x), sizeof(double));
-        infile.read(reinterpret_cast<char*>(&tj.msg.linear.y), sizeof(double));
-        infile.read(reinterpret_cast<char*>(&tj.msg.linear.z), sizeof(double));
+        // Baseline time for all messages
+        rclcpp::Time base_time(0, 0);
         
-        // Read angular velocity
-        infile.read(reinterpret_cast<char*>(&tj.msg.angular.x), sizeof(double));
-        infile.read(reinterpret_cast<char*>(&tj.msg.angular.y), sizeof(double));
-        infile.read(reinterpret_cast<char*>(&tj.msg.angular.z), sizeof(double));
+        // Read each message
+        for (size_t i = 0; i < num_msgs; i++) {
+            TimestampedTwist tj;
+            
+            // Read time delta
+            int64_t nanosec_delta;
+            infile.read(reinterpret_cast<char*>(&nanosec_delta), sizeof(nanosec_delta));
+            
+            // Calculate timestamp relative to base_time
+            tj.time = base_time + rclcpp::Duration(std::chrono::nanoseconds(nanosec_delta));
+            
+            // Read linear velocity
+            infile.read(reinterpret_cast<char*>(&tj.msg.linear.x), sizeof(double));
+            infile.read(reinterpret_cast<char*>(&tj.msg.linear.y), sizeof(double));
+            infile.read(reinterpret_cast<char*>(&tj.msg.linear.z), sizeof(double));
+            
+            // Read angular velocity
+            infile.read(reinterpret_cast<char*>(&tj.msg.angular.x), sizeof(double));
+            infile.read(reinterpret_cast<char*>(&tj.msg.angular.y), sizeof(double));
+            infile.read(reinterpret_cast<char*>(&tj.msg.angular.z), sizeof(double));
+            
+            temp_data.push_back(tj);
+        }
         
-        replay_data_.push_back(tj);
-      }
-      
-      infile.close();
-      
-      if (replay_data_.empty()) {
-        RCLCPP_WARN(this->get_logger(), "No velocity messages in replay file");
-        return false;
-      }
-      
-      // Debug: print timing info
-      RCLCPP_INFO(this->get_logger(), "Loaded %zu messages from %s", 
-                 replay_data_.size(), replay_file_.c_str());
-      
-      // Calculate total duration of the replay sequence
-      if (replay_data_.size() > 1) {
-        double duration = replay_data_.back().time.seconds() - replay_data_.front().time.seconds();
-        RCLCPP_INFO(this->get_logger(), "Replay sequence duration: %.2f seconds", duration);
-      }
-      
-      return true;
+        infile.close();
+        
+        if (temp_data.empty()) {
+            RCLCPP_WARN(this->get_logger(), "No velocity messages in replay file");
+            return false;
+        }
+
+        // Get total sequence duration before trimming
+        double total_duration = 0.0;
+        if (temp_data.size() > 1) {
+            total_duration = temp_data.back().time.seconds() - temp_data.front().time.seconds();
+        }
+
+        // Now apply the trimming
+        replay_data_.clear();
+        
+        // Calculate trim thresholds
+        double start_trim_threshold = trim_start_seconds_;
+        double end_trim_threshold = total_duration - trim_end_seconds_;
+        
+        // Make sure end_trim_threshold is greater than start_trim_threshold
+        if (end_trim_threshold <= start_trim_threshold) {
+            RCLCPP_WARN(this->get_logger(), 
+                      "Trim parameters would remove entire sequence! Using only start trim.");
+            end_trim_threshold = total_duration;
+        }
+        
+        // Find valid message indices after applying trim
+        size_t first_included_idx = 0;
+        size_t last_included_idx = temp_data.size() - 1;
+        
+        // Find first message after start trim point
+        if (start_trim_threshold > 0.0) {
+            for (size_t i = 0; i < temp_data.size(); i++) {
+                if (temp_data[i].time.seconds() >= start_trim_threshold) {
+                    first_included_idx = i;
+                    break;
+                }
+            }
+        }
+        
+        // Find last message before end trim point
+        if (trim_end_seconds_ > 0.0) {
+            for (size_t i = temp_data.size(); i-- > 0; ) {
+                if (temp_data[i].time.seconds() <= end_trim_threshold) {
+                    last_included_idx = i;
+                    break;
+                }
+            }
+        }
+        
+        // Make sure we have valid indices
+        if (first_included_idx > last_included_idx) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid trim indices: %zu to %zu", 
+                       first_included_idx, last_included_idx);
+            return false;
+        }
+        
+        // If we're trimming the start, rebase the times
+        rclcpp::Time new_base_time = (first_included_idx > 0) ? 
+                                    temp_data[first_included_idx].time : 
+                                    rclcpp::Time(0, 0);
+        
+        // Add all messages within the valid range with adjusted timestamps
+        for (size_t i = first_included_idx; i <= last_included_idx; i++) {
+            TimestampedTwist tj = temp_data[i];
+            
+            // Adjust timestamp to be relative to the new base time
+            tj.time = rclcpp::Time(0, 0) + (tj.time - new_base_time);
+            
+            replay_data_.push_back(tj);
+        }
+        
+        // Debug: print timing info
+        size_t start_trimmed = first_included_idx;
+        size_t end_trimmed = temp_data.size() - last_included_idx - 1;
+        
+        RCLCPP_INFO(this->get_logger(), 
+                   "Loaded %zu messages from %s (trimmed %zu from start, %zu from end)", 
+                   replay_data_.size(), replay_file_.c_str(), 
+                   start_trimmed, end_trimmed);
+        
+        // Calculate total duration of the trimmed replay sequence
+        if (replay_data_.size() > 1) {
+            double duration = replay_data_.back().time.seconds() - replay_data_.front().time.seconds();
+            RCLCPP_INFO(this->get_logger(), 
+                      "Original duration: %.2f seconds, Trimmed duration: %.2f seconds", 
+                      total_duration, duration);
+        }
+        
+        return true;
     } catch (const std::exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to load replay file: %s", e.what());
-      return false;
+        RCLCPP_ERROR(this->get_logger(), "Failed to load replay file: %s", e.what());
+        return false;
     }
   }
   
@@ -280,9 +358,13 @@ private:
     replay_thread_.detach();  // Let it run independently
     
     response->success = true;
-    response->message = "Started replaying velocity commands " + 
-                       (loop_replay_ ? "with looping enabled" : "once") + 
-                       " to " + (replay_to_cmd_vel_ ? "/cmd_vel" : "/cmd_vel_replay");
+
+    std::stringstream ss;
+    ss << "Started replaying velocity commands ";
+    ss << (loop_replay_ ? "with looping enabled" : "once");
+    ss << " to ";
+    ss << (replay_to_cmd_vel_ ? "/cmd_vel" : "/cmd_vel_replay");
+    response->message = ss.str();
   }
   
   bool replay_sequence() {
@@ -455,6 +537,8 @@ private:
   std::string replay_file_;
   std::vector<TimestampedTwist> replay_data_;
   
+  double trim_start_seconds_{0.0};
+  double trim_end_seconds_{0.0};
   std::thread replay_thread_;
   std::atomic<bool> stop_replay_{false};
   std::atomic<bool> replay_active_{false};
