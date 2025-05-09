@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(joy_utils)
+project(dancing)
 
 # Default to C++17
 set(CMAKE_CXX_STANDARD 17)
@@ -12,13 +12,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-# Generate custom service message
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/ReplayJoy.srv"
-  DEPENDENCIES std_msgs
-)
 
 # Add the executable
 add_executable(joy_recorder src/joy_recorder.cpp)
@@ -35,9 +28,6 @@ ament_target_dependencies(joy_recorder
   std_srvs
   controller_manager_msgs
 )
-
-rosidl_target_interfaces(joy_recorder
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # Install the executable
 install(TARGETS joy_recorder
