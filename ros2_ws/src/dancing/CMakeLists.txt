@@ -16,8 +16,12 @@ find_package(std_srvs REQUIRED)
 
 # Add the executable
 add_executable(velocity_recorder src/velocity_recorder.cpp)
-
 target_include_directories(velocity_recorder PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+add_executable(velocity_replayer src/velocity_replayer.cpp)
+target_include_directories(velocity_replayer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
@@ -31,14 +35,23 @@ ament_target_dependencies(velocity_recorder
   controller_manager_msgs
 )
 
+ament_target_dependencies(velocity_replayer
+  rclcpp
+  sensor_msgs
+  std_msgs
+  std_srvs
+  geometry_msgs
+  controller_manager_msgs
+)
+
 # Link with pthread and rt libraries
-target_link_libraries(velocity_recorder
+target_link_libraries(velocity_replayer
   pthread
   rt
 )
 
 # Install the executable
-install(TARGETS velocity_recorder
+install(TARGETS velocity_recorder velocity_replayer
   DESTINATION lib/${PROJECT_NAME}
 )
 
