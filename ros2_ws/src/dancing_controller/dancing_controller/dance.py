@@ -41,6 +41,8 @@ class DanceController(Node):
         
         # Wait for services to be available
         self.wait_for_services()
+
+        self.switch_controller('neural_controller_dance', 'neural_controller')
         
         # Motion control
         self.current_motion = None
@@ -246,7 +248,7 @@ class DanceController(Node):
         """Run the circledance motion with the necessary controller switches."""
         try:
             # Switch controller before
-            self.switch_controller('dance_controller', True)  # Assuming controller name, modify as needed
+            self.switch_controller('neural_controller', 'neural_controller_dance')  # Assuming controller name, modify as needed
             
             # Run the motion if switch was successful
             if not self.motion_stop_event.is_set():
@@ -254,23 +256,19 @@ class DanceController(Node):
             
             # Switch controller after (only if we haven't been asked to stop)
             if not self.motion_stop_event.is_set():
-                self.switch_controller('default_controller', True)  # Assuming controller name, modify as needed
+                self.switch_controller('neural_controller_dance', 'neural_controller')  # Assuming controller name, modify as needed
                 
         except Exception as e:
             self.get_logger().error(f'Error in circledance: {str(e)}')
             # Attempt to switch back to default controller in case of error
-            self.switch_controller('default_controller', True)
+            self.switch_controller('neural_controller_dance', 'neural_controller')
     
-    def switch_controller(self, controller_name, start_controller):
+    def switch_controller(self, controller_name, deactivate_controller_name):
         """Call the switch_controller service."""
         request = SwitchController.Request()
         
-        if start_controller:
-            request.start_controllers = [controller_name]
-            request.stop_controllers = []
-        else:
-            request.start_controllers = []
-            request.stop_controllers = [controller_name]
+        request.activate_controllers = [controller_name]
+        request.deactivate_controllers = [deactivate_controller_name]
         
         request.strictness = 1  # BEST_EFFORT
         request.start_asap = True

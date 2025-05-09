@@ -22,7 +22,8 @@ public:
     // Declare parameters for controller names
     this->declare_parameter<std::vector<std::string>>(
         "controller_names",
-        {"neural_controller", "neural_controller_three_legged"});
+        // {"neural_controller", "neural_controller_three_legged"});
+        {"neural_controller", "neural_controller_dance"});
 
     // Get parameter values
     this->get_parameter("estop_index", estop_index_);

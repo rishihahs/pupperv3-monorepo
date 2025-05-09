@@ -118,11 +118,24 @@ def generate_launch_description():
         ],
     )
 
-    three_legged_robot_controller_spawner = Node(
+    # three_legged_robot_controller_spawner = Node(
+    #     package="controller_manager",
+    #     executable="spawner",
+    #     arguments=[
+    #         "neural_controller_three_legged",
+    #         "--controller-manager",
+    #         "/controller_manager",
+    #         "--controller-manager-timeout",
+    #         "30",
+    #         "--inactive",
+    #     ],
+    # )
+
+    dance_robot_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[
-            "neural_controller_three_legged",
+            "neural_controller_dance",
             "--controller-manager",
             "/controller_manager",
             "--controller-manager-timeout",
@@ -183,7 +196,8 @@ def generate_launch_description():
         robot_state_publisher,
         control_node,
         robot_controller_spawner,
-        three_legged_robot_controller_spawner,
+        # three_legged_robot_controller_spawner,
+        dance_robot_controller_spawner,
         joint_state_broadcaster_spawner,
         # Comment/uncomment as needed:
         imu_sensor_broadcaster_spawner,
