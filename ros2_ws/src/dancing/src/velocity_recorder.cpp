@@ -7,82 +7,82 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <pthread.h>         // For thread priority
-#include <sys/mman.h>        // For memory locking
-#include <time.h>            // For high precision sleep
+#include <pthread.h>
+#include <sys/mman.h>
+#include <time.h>
 
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/joy.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 
 using namespace std::chrono_literals;
 
-class JoyRecorder : public rclcpp::Node {
+class VelocityRecorder : public rclcpp::Node {
 public:
-  JoyRecorder(double buffer_seconds = 10.0)
-  : Node("joy_recorder"), buffer_duration_(std::chrono::duration<double>(buffer_seconds)) {
+  VelocityRecorder(double buffer_seconds = 10.0)
+  : Node("velocity_recorder"), buffer_duration_(std::chrono::duration<double>(buffer_seconds)) {
     // Parameters
     this->declare_parameter("buffer_seconds", buffer_seconds);
-    this->declare_parameter("replay_file", "joy_replay_data.bin");
-    this->declare_parameter("replay_to_joy", false);
-    this->declare_parameter("replay_time_factor", 1.0);  // New parameter for timing adjustment
+    this->declare_parameter("replay_file", "velocity_replay_data.bin");
+    this->declare_parameter("replay_to_cmd_vel", false);
+    this->declare_parameter("replay_time_factor", 1.0);
     
     buffer_duration_ = std::chrono::duration<double>(
       this->get_parameter("buffer_seconds").as_double());
     replay_file_ = this->get_parameter("replay_file").as_string();
-    replay_to_joy_ = this->get_parameter("replay_to_joy").as_bool();
+    replay_to_cmd_vel_ = this->get_parameter("replay_to_cmd_vel").as_bool();
     replay_time_factor_ = this->get_parameter("replay_time_factor").as_double();
     
     RCLCPP_INFO(this->get_logger(), "Replay time factor set to %.3f", replay_time_factor_);
     
-    // Subscriber with reliable QoS to ensure we get all messages
-    joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
-      "/joy", rclcpp::QoS(rclcpp::KeepLast(100)).best_effort(),
-      std::bind(&JoyRecorder::joy_callback, this, std::placeholders::_1));
+    // Subscriber
+    cmd_vel_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>(
+      "/cmd_vel", rclcpp::QoS(rclcpp::KeepLast(100)).best_effort(),
+      std::bind(&VelocityRecorder::cmd_vel_callback, this, std::placeholders::_1));
     
     // Publishers
-    joy_replay_publisher_ = this->create_publisher<sensor_msgs::msg::Joy>(
-      "/joy", rclcpp::QoS(rclcpp::KeepLast(100)).reliable());
+    cmd_vel_replay_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
+      "/cmd_vel_replay", rclcpp::QoS(rclcpp::KeepLast(100)).reliable());
     
-    joy_publisher_ = this->create_publisher<sensor_msgs::msg::Joy>(
-      "/joy", rclcpp::QoS(rclcpp::KeepLast(100)).reliable());
+    cmd_vel_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
+      "/cmd_vel", rclcpp::QoS(rclcpp::KeepLast(100)).reliable());
     
     // Services
     save_service_ = this->create_service<std_srvs::srv::Trigger>(
-      "save_joy_recording", 
-      std::bind(&JoyRecorder::save_recording, this, 
+      "save_velocity_recording", 
+      std::bind(&VelocityRecorder::save_recording, this, 
                 std::placeholders::_1, std::placeholders::_2));
                 
     replay_service_ = this->create_service<std_srvs::srv::Trigger>(
-      "replay_joy", 
-      std::bind(&JoyRecorder::replay_joy, this, 
+      "replay_velocity", 
+      std::bind(&VelocityRecorder::replay_velocity, this, 
                 std::placeholders::_1, std::placeholders::_2));
     
     stop_replay_service_ = this->create_service<std_srvs::srv::Trigger>(
-      "stop_joy_replay", 
-      std::bind(&JoyRecorder::stop_replay, this, 
+      "stop_velocity_replay", 
+      std::bind(&VelocityRecorder::stop_replay, this, 
                 std::placeholders::_1, std::placeholders::_2));
                 
     set_replay_target_service_ = this->create_service<std_srvs::srv::SetBool>(
-      "set_replay_to_joy", 
-      std::bind(&JoyRecorder::set_replay_target, this, 
+      "set_replay_to_cmd_vel", 
+      std::bind(&VelocityRecorder::set_replay_target, this, 
                 std::placeholders::_1, std::placeholders::_2));
                 
     stats_service_ = this->create_service<std_srvs::srv::Trigger>(
-      "joy_recorder_stats", 
-      std::bind(&JoyRecorder::report_stats_service, this, 
+      "velocity_recorder_stats", 
+      std::bind(&VelocityRecorder::report_stats_service, this, 
                 std::placeholders::_1, std::placeholders::_2));
                 
     // Timer for buffer stats reporting
     stats_timer_ = this->create_wall_timer(
-      5s, std::bind(&JoyRecorder::report_stats, this));
+      5s, std::bind(&VelocityRecorder::report_stats, this));
                 
-    RCLCPP_INFO(this->get_logger(), "Joy recorder initialized with %f second buffer", 
+    RCLCPP_INFO(this->get_logger(), "Velocity recorder initialized with %f second buffer", 
                buffer_seconds);
   }
 
-  ~JoyRecorder() {
+  ~VelocityRecorder() {
     // Make sure to stop any active replay
     if (replay_active_) {
       stop_replay_ = true;
@@ -93,18 +93,18 @@ public:
   }
 
 private:
-  struct TimestampedJoy {
+  struct TimestampedTwist {
     rclcpp::Time time;
-    sensor_msgs::msg::Joy msg;
+    geometry_msgs::msg::Twist msg;
   };
 
-  void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg) {
+  void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
     auto now = this->now();
     
     // Lock while modifying buffer
     {
       std::lock_guard<std::mutex> lock(buffer_mutex_);
-      joy_buffer_.push_back({now, *msg});
+      cmd_vel_buffer_.push_back({now, *msg});
       
       // Track received message rate
       if (last_msg_time_.nanoseconds() > 0) {
@@ -117,10 +117,10 @@ private:
       last_msg_time_ = now;
       
       // Remove old messages from buffer
-      while (!joy_buffer_.empty()) {
-        auto oldest = joy_buffer_.front().time;
+      while (!cmd_vel_buffer_.empty()) {
+        auto oldest = cmd_vel_buffer_.front().time;
         if ((now - oldest).seconds() > buffer_duration_.count()) {
-          joy_buffer_.pop_front();
+          cmd_vel_buffer_.pop_front();
         } else {
           break;
         }
@@ -143,7 +143,7 @@ private:
     
     RCLCPP_INFO(this->get_logger(), 
                "Buffer stats - Size: %zu messages, Rate: %.2f Hz", 
-               joy_buffer_.size(), avg_rate);
+               cmd_vel_buffer_.size(), avg_rate);
   }
   
   void report_stats_service(
@@ -151,7 +151,7 @@ private:
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     
     std::stringstream ss;
-    ss << "Joy Recorder Performance Metrics:\n";
+    ss << "Velocity Recorder Performance Metrics:\n";
     
     // Message frequency stats
     ss << "Current input frequency: " << current_input_hz_ << " Hz\n";
@@ -164,51 +164,53 @@ private:
     // Buffer stats
     {
       std::lock_guard<std::mutex> lock(buffer_mutex_);
-      ss << "Buffer utilization: " << joy_buffer_.size() << " messages\n";
+      ss << "Buffer utilization: " << cmd_vel_buffer_.size() << " messages\n";
     }
     
     // Replay settings
-    ss << "Replay destination: " << (replay_to_joy_ ? "/joy" : "/joy_replay") << "\n";
+    ss << "Replay destination: " << (replay_to_cmd_vel_ ? "/cmd_vel" : "/cmd_vel_replay") << "\n";
     ss << "Replay time factor: " << replay_time_factor_ << "\n";
     
     response->success = true;
     response->message = ss.str();
   }
   
-  bool all_axes_zero(const sensor_msgs::msg::Joy& joy_msg) {
-    for (const auto& axis : joy_msg.axes) {
-      if (std::abs(axis) > 0.001) { // Small threshold to account for noise
-        return false;
-      }
-    }
-    return true;
+  bool is_zero_velocity(const geometry_msgs::msg::Twist& twist_msg) {
+    // Check if linear and angular velocities are close to zero
+    const double epsilon = 0.001;
+    return (std::abs(twist_msg.linear.x) < epsilon && 
+            std::abs(twist_msg.linear.y) < epsilon &&
+            std::abs(twist_msg.linear.z) < epsilon &&
+            std::abs(twist_msg.angular.x) < epsilon &&
+            std::abs(twist_msg.angular.y) < epsilon &&
+            std::abs(twist_msg.angular.z) < epsilon);
   }
   
   void save_recording(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     
-    std::vector<TimestampedJoy> to_save;
+    std::vector<TimestampedTwist> to_save;
     {
       std::lock_guard<std::mutex> lock(buffer_mutex_);
       
-      if (joy_buffer_.empty()) {
+      if (cmd_vel_buffer_.empty()) {
         response->success = false;
-        response->message = "No joystick data in buffer";
+        response->message = "No velocity data in buffer";
         return;
       }
       
-      // Find the last non-zero joystick command
-      size_t last_non_zero = joy_buffer_.size() - 1;
+      // Find the last non-zero velocity command
+      size_t last_non_zero = cmd_vel_buffer_.size() - 1;
       while (last_non_zero > 0) {
-        if (!all_axes_zero(joy_buffer_[last_non_zero].msg)) {
+        if (!is_zero_velocity(cmd_vel_buffer_[last_non_zero].msg)) {
           break;
         }
         last_non_zero--;
       }
       
       // Prepare data for saving - make a copy to avoid holding the lock
-      to_save.assign(joy_buffer_.begin(), joy_buffer_.begin() + last_non_zero + 1);
+      to_save.assign(cmd_vel_buffer_.begin(), cmd_vel_buffer_.begin() + last_non_zero + 1);
     }
     
     // Save to file
@@ -229,40 +231,21 @@ private:
         int64_t nanosec_delta = time_delta.nanoseconds();
         outfile.write(reinterpret_cast<char*>(&nanosec_delta), sizeof(nanosec_delta));
         
-        // Write header stamp and frame_id for proper header preservation
-        int64_t header_sec = tj.msg.header.stamp.sec;
-        uint32_t header_nanosec = tj.msg.header.stamp.nanosec;
-        outfile.write(reinterpret_cast<char*>(&header_sec), sizeof(header_sec));
-        outfile.write(reinterpret_cast<char*>(&header_nanosec), sizeof(header_nanosec));
+        // Write linear velocity
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.linear.x), sizeof(double));
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.linear.y), sizeof(double));
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.linear.z), sizeof(double));
         
-        // Write frame_id length and string
-        size_t frame_id_len = tj.msg.header.frame_id.size();
-        outfile.write(reinterpret_cast<char*>(&frame_id_len), sizeof(frame_id_len));
-        if (frame_id_len > 0) {
-          outfile.write(tj.msg.header.frame_id.c_str(), frame_id_len);
-        }
-        
-        // Write axes
-        size_t num_axes = tj.msg.axes.size();
-        outfile.write(reinterpret_cast<char*>(&num_axes), sizeof(num_axes));
-        if (num_axes > 0) {
-          outfile.write(reinterpret_cast<const char*>(tj.msg.axes.data()), 
-                       num_axes * sizeof(float));
-        }
-        
-        // Write buttons
-        size_t num_buttons = tj.msg.buttons.size();
-        outfile.write(reinterpret_cast<char*>(&num_buttons), sizeof(num_buttons));
-        if (num_buttons > 0) {
-          outfile.write(reinterpret_cast<const char*>(tj.msg.buttons.data()), 
-                       num_buttons * sizeof(int));
-        }
+        // Write angular velocity
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.angular.x), sizeof(double));
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.angular.y), sizeof(double));
+        outfile.write(reinterpret_cast<const char*>(&tj.msg.angular.z), sizeof(double));
       }
       
       outfile.close();
       response->success = true;
       response->message = "Saved " + std::to_string(to_save.size()) + 
-                         " joy messages to " + replay_file_;
+                         " velocity messages to " + replay_file_;
       RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
       
       // Debug: print timing info for first few messages
@@ -286,7 +269,7 @@ private:
     }
   }
   
-  void replay_joy(
+  void replay_velocity(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     
@@ -308,7 +291,7 @@ private:
       size_t num_msgs;
       infile.read(reinterpret_cast<char*>(&num_msgs), sizeof(num_msgs));
       
-      std::vector<TimestampedJoy> replay_data;
+      std::vector<TimestampedTwist> replay_data;
       replay_data.reserve(num_msgs);
       
       // Baseline time for all messages
@@ -316,7 +299,7 @@ private:
       
       // Read each message
       for (size_t i = 0; i < num_msgs; i++) {
-        TimestampedJoy tj;
+        TimestampedTwist tj;
         
         // Read time delta
         int64_t nanosec_delta;
@@ -325,41 +308,15 @@ private:
         // Calculate timestamp relative to base_time
         tj.time = base_time + rclcpp::Duration(std::chrono::nanoseconds(nanosec_delta));
         
-        // Read header stamp and frame_id
-        int64_t header_sec;
-        uint32_t header_nanosec;
-        infile.read(reinterpret_cast<char*>(&header_sec), sizeof(header_sec));
-        infile.read(reinterpret_cast<char*>(&header_nanosec), sizeof(header_nanosec));
+        // Read linear velocity
+        infile.read(reinterpret_cast<char*>(&tj.msg.linear.x), sizeof(double));
+        infile.read(reinterpret_cast<char*>(&tj.msg.linear.y), sizeof(double));
+        infile.read(reinterpret_cast<char*>(&tj.msg.linear.z), sizeof(double));
         
-        tj.msg.header.stamp.sec = header_sec;
-        tj.msg.header.stamp.nanosec = header_nanosec;
-        
-        // Read frame_id
-        size_t frame_id_len;
-        infile.read(reinterpret_cast<char*>(&frame_id_len), sizeof(frame_id_len));
-        if (frame_id_len > 0) {
-          std::vector<char> frame_id_buffer(frame_id_len + 1, '\0');
-          infile.read(frame_id_buffer.data(), frame_id_len);
-          tj.msg.header.frame_id = std::string(frame_id_buffer.data(), frame_id_len);
-        }
-        
-        // Read axes
-        size_t num_axes;
-        infile.read(reinterpret_cast<char*>(&num_axes), sizeof(num_axes));
-        tj.msg.axes.resize(num_axes);
-        if (num_axes > 0) {
-          infile.read(reinterpret_cast<char*>(tj.msg.axes.data()), 
-                     num_axes * sizeof(float));
-        }
-        
-        // Read buttons
-        size_t num_buttons;
-        infile.read(reinterpret_cast<char*>(&num_buttons), sizeof(num_buttons));
-        tj.msg.buttons.resize(num_buttons);
-        if (num_buttons > 0) {
-          infile.read(reinterpret_cast<char*>(tj.msg.buttons.data()), 
-                     num_buttons * sizeof(int));
-        }
+        // Read angular velocity
+        infile.read(reinterpret_cast<char*>(&tj.msg.angular.x), sizeof(double));
+        infile.read(reinterpret_cast<char*>(&tj.msg.angular.y), sizeof(double));
+        infile.read(reinterpret_cast<char*>(&tj.msg.angular.z), sizeof(double));
         
         replay_data.push_back(tj);
       }
@@ -368,7 +325,7 @@ private:
       
       if (replay_data.empty()) {
         response->success = false;
-        response->message = "No joy messages in replay file";
+        response->message = "No velocity messages in replay file";
         return;
       }
       
@@ -404,7 +361,7 @@ private:
                      "Failed to set thread to real-time priority. Replay timing may be less accurate.");
         }
         
-        RCLCPP_INFO(this->get_logger(), "Starting replay of %zu joy messages", 
+        RCLCPP_INFO(this->get_logger(), "Starting replay of %zu velocity messages", 
                   replay_data.size());
         
         // Record the start time
@@ -429,7 +386,7 @@ private:
           }
           
           // Get target time for this message
-          auto& tj = replay_data[i];
+          const auto& tj = replay_data[i];
           
           // Apply time factor for speed adjustment
           double scaled_delta = tj.time.seconds() * replay_time_factor_;
@@ -452,15 +409,14 @@ private:
             clock_nanosleep(CLOCK_MONOTONIC, 0, &req, &rem);
           }
           
-          // Update header with current time for accurate timestamps
-          auto current_time = this->now();
-          tj.msg.header.stamp = current_time;
+          // Create a copy of the message that we can modify if needed
+          geometry_msgs::msg::Twist message_copy = tj.msg;
           
           // Publish to appropriate topic
-          if (replay_to_joy_) {
-            joy_publisher_->publish(tj.msg);
+          if (replay_to_cmd_vel_) {
+            cmd_vel_publisher_->publish(message_copy);
           } else {
-            joy_replay_publisher_->publish(tj.msg);
+            cmd_vel_replay_publisher_->publish(message_copy);
           }
           
           // Calculate actual timing error
@@ -507,7 +463,7 @@ private:
       
       response->success = true;
       response->message = "Started replaying " + std::to_string(num_msgs) + 
-                         " joy messages to " + (replay_to_joy_ ? "/joy" : "/joy_replay") + " topic";
+                         " velocity messages to " + (replay_to_cmd_vel_ ? "/cmd_vel" : "/cmd_vel_replay") + " topic";
       
     } catch (const std::exception& e) {
       response->success = false;
@@ -542,15 +498,15 @@ private:
       return;
     }
     
-    replay_to_joy_ = request->data;
+    replay_to_cmd_vel_ = request->data;
     
     response->success = true;
-    response->message = "Replay target set to " + std::string(replay_to_joy_ ? "/joy" : "/joy_replay");
+    response->message = "Replay target set to " + std::string(replay_to_cmd_vel_ ? "/cmd_vel" : "/cmd_vel_replay");
   }
 
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
-  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_publisher_;          // For /joy topic
-  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_replay_publisher_;   // For /joy_replay topic
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;       // For /cmd_vel topic
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_replay_publisher_; // For /cmd_vel_replay topic
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr replay_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_replay_service_;
@@ -558,7 +514,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stats_service_;
   rclcpp::TimerBase::SharedPtr stats_timer_;
   
-  std::deque<TimestampedJoy> joy_buffer_;
+  std::deque<TimestampedTwist> cmd_vel_buffer_;
   std::chrono::duration<double> buffer_duration_;
   std::string replay_file_;
   std::mutex buffer_mutex_;
@@ -566,7 +522,7 @@ private:
   std::thread replay_thread_;
   std::atomic<bool> stop_replay_{false};
   std::atomic<bool> replay_active_{false};
-  std::atomic<bool> replay_to_joy_{false};
+  std::atomic<bool> replay_to_cmd_vel_{false};
   
   // Configurable time factor for replay
   double replay_time_factor_{1.0};
@@ -590,7 +546,7 @@ int main(int argc, char * argv[]) {
   }
   
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<JoyRecorder>();
+  auto node = std::make_shared<VelocityRecorder>();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

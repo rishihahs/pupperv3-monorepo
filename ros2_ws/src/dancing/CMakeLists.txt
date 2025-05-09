@@ -9,34 +9,36 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
 # Add the executable
-add_executable(joy_recorder src/joy_recorder.cpp)
+add_executable(velocity_recorder src/velocity_recorder.cpp)
 
-target_include_directories(joy_recorder PUBLIC
+target_include_directories(velocity_recorder PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
 # Link against ROS 2 libraries
-ament_target_dependencies(joy_recorder
+ament_target_dependencies(velocity_recorder
   rclcpp
   sensor_msgs
   std_msgs
   std_srvs
+  geometry_msgs
   controller_manager_msgs
 )
 
 # Link with pthread and rt libraries
-target_link_libraries(joy_recorder
+target_link_libraries(velocity_recorder
   pthread
   rt
 )
 
 # Install the executable
-install(TARGETS joy_recorder
+install(TARGETS velocity_recorder
   DESTINATION lib/${PROJECT_NAME}
 )
 
