@@ -29,6 +29,12 @@ ament_target_dependencies(joy_recorder
   controller_manager_msgs
 )
 
+# Link with pthread and rt libraries
+target_link_libraries(joy_recorder
+  pthread
+  rt
+)
+
 # Install the executable
 install(TARGETS joy_recorder
   DESTINATION lib/${PROJECT_NAME}
