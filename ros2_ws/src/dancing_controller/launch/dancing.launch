@@ -1,0 +1,24 @@
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='dancing',
+            executable='velocity_replayer',
+            name='velocity_replayer',
+            parameters=[
+                {'replay_file': '/home/pi/pupperv3-monorepo/ros2_ws/velocity_recording.bin'},
+                {'replay_to_cmd_vel': True},
+                {'loop_replay': True},
+                {'loop_pause_time': 0.1},
+            ]
+        ),
+
+        Node(
+            package='dancing_controller',
+            executable='dance',
+            name='dance_node',
+            parameters=[]
+        )
+    ])
