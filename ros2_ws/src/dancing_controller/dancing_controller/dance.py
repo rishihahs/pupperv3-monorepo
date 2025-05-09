@@ -5,6 +5,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from builtin_interfaces.msg import Duration
 from controller_manager_msgs.srv import SwitchController
 import threading
 import time
@@ -222,8 +223,8 @@ class DanceController(Node):
 
     def circledance(self):
         """Example circledance motion implementation using move."""
-        self.move(0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 4.0)  # Turn right
-        time.sleep(4.0)
+        self.move(0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 9.0, rate=30)  # Turn right
+        time.sleep(9.0)
     
     def run_headbang(self):
         """Run the headbang motion until stopped."""
@@ -245,6 +246,7 @@ class DanceController(Node):
         try:
             # Switch controller before
             self.switch_controller('neural_controller', 'neural_controller_dance')  # Assuming controller name, modify as needed
+            time.sleep(3.0)
             
             # Run the motion if switch was successful
             if not self.motion_stop_event.is_set():
@@ -253,11 +255,13 @@ class DanceController(Node):
             # Switch controller after (only if we haven't been asked to stop)
             if not self.motion_stop_event.is_set():
                 self.switch_controller('neural_controller_dance', 'neural_controller')  # Assuming controller name, modify as needed
+                time.sleep(3.0)
                 
         except Exception as e:
             self.get_logger().error(f'Error in circledance: {str(e)}')
             # Attempt to switch back to default controller in case of error
             self.switch_controller('neural_controller_dance', 'neural_controller')
+            time.sleep(3.0)
     
     def switch_controller(self, controller_name, deactivate_controller_name):
         """Call the switch_controller service."""
@@ -267,10 +271,12 @@ class DanceController(Node):
         request.deactivate_controllers = [deactivate_controller_name]
         
         request.strictness = 1  # BEST_EFFORT
-        request.start_asap = True
-        request.timeout = 1.0
+        timeout = Duration()
+        timeout.sec = 1  # 1 second
+        timeout.nanosec = 0
+        request.timeout = timeout
         
-        self.get_logger().info(f'Switching controller: {"starting" if start_controller else "stopping"} {controller_name}')
+        self.get_logger().info(f'Switching controller: {controller_name}')
         
         future = self.switch_controller_client.call_async(request)
         # Note: In a real application, you'd want to add a callback to handle the response
