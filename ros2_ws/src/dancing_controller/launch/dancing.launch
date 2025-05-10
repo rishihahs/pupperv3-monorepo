@@ -15,10 +15,17 @@ def generate_launch_description():
             ]
         ),
 
+       Node(
+            package='dancing_controller',
+            executable='ears',
+            name='ears',
+            parameters=[]
+        ),
+
         Node(
             package='dancing_controller',
             executable='dance',
             name='dance_node',
             parameters=[]
-        )
+        ),
     ])

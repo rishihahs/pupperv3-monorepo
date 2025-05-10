@@ -22,7 +22,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "dancing_controller = dancing_controller.dance:main",
+            "dance = dancing_controller.dance:main",
+            "ears = dancing_controller.ears:main",
         ],
     },
 )
