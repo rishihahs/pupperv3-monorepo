@@ -24,6 +24,7 @@ setup(
         "console_scripts": [
             "dance = dancing_controller.dance:main",
             "ears = dancing_controller.ears:main",
+            "button = dancing_controller.button:main",
         ],
     },
 )
